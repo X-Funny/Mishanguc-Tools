@@ -2,221 +2,175 @@ importPackage(Packages.com.sk89q.worldedit);
 importPackage(Packages.com.sk89q.worldedit.math);
 importPackage(Packages.com.sk89q.worldedit.blocks);
 
-var blocks = context.remember();
-var player = context.getPlayer();
+(function() { 
+    var blocks = context.remember();
+    var player = context.getPlayer();
 
-if (argv[1] == undefined) {
-    player.printError("请输入参数")
-}
-else if (argv[1] == "w" || argv[1] == "wt" || argv[1] == "wo" || argv[1] == "y" || argv[1] == "yd" || argv[1] == "yo") {
+    // --- 参数解析 ---
+    var type = argv[1];
+    var gapLen = (argv[2] !== undefined) ? parseInt(argv[2]) : 0;  // 空格长
+    var dashLen = (argv[3] !== undefined) ? parseInt(argv[3]) : 1; // 线长
 
+    // 判断是否输入了虚线参数
+    var isDashed = (argv[2] !== undefined && argv[3] !== undefined);
+
+    // --- 如果输入了虚线参数，但其中一个为 0 或无效，则退出 ---
+    if (isDashed) {
+        if (isNaN(gapLen) || gapLen <= 0) {
+            player.printError("无效参数：虚线空格长(参数2)必须大于 0！");
+            return;
+        }
+        if (isNaN(dashLen) || dashLen <= 0) {
+            player.printError("无效参数：虚线线长(参数3)必须大于 0！");
+            return;
+        }
+    }
+
+    var GAP_BLOCK_ID = "mishanguc:road_block"; // 虚线空缺处填充的方块
+
+    // 方块配置映射表
+    var blockConfig = {
+        "wo": { out: "white_offset_out_ba", in: "white_offset_in_ba", def: "white_offset", useAxis: false },
+        "yo": { out: "yellow_offset_out_ba", in: "yellow_offset_in_ba", def: "yellow_offset", useAxis: false },
+        "w":  { out: "white_ba", in: "white_ba", def: "white", useAxis: true },
+        "wt": { out: "white_ba_thick", in: "white_ba_thick", def: "white_thick", useAxis: true },
+        "y":  { out: "yellow_ba", in: "yellow_ba", def: "yellow", useAxis: true },
+        "yd": { out: "yellow_ba_double", in: "yellow_ba_double", def: "yellow_double", useAxis: true }
+    };
+
+    if (!type || !blockConfig[type]) {
+        player.printError("请输入正确参数。仅支持：w, wt, wo, y, yd, yo");
+        player.print("用法: /js <script> <类型> [空格长] [线长]");
+        return;
+    }
+
+    // --- 启动主函数 ---
+    var startPos = player.getBlockOn().toVector().toBlockPoint();
+    if (isLineEndPoint(startPos)) {
+        replaceFacingBlocks(startPos, 10000);
+    } else {
+        player.printError("这不是线的端点，请站在端点上运行。");
+    }
+
+    // --- 辅助函数定义 ---
+
+    function getBaseName(pos) {
+        var block = blocks.getBlock(pos);
+        return block ? String(block).split("[")[0] : "minecraft:air";
+    }
 
     function isLineEndPoint(pos) {
-        var block = blocks.getBlock(pos);
-        if (!block) return false;
-        var blockName = String(block).split("[")[0];
-
-        function isSameLineBlock(p) {
-            var b = blocks.getBlock(p);
-            if (!b) return false;
-            var name = String(b).split("[")[0];
-            return name === blockName;
-        }
+        var blockName = getBaseName(pos);
+        if (blockName === "minecraft:air") return false;
 
         var directions = [
-            BlockVector3.at(1, 0, 0),
-            BlockVector3.at(-1, 0, 0),
-            BlockVector3.at(0, 0, 1),
-            BlockVector3.at(0, 0, -1),
-            BlockVector3.at(0, 1, 0),
-            BlockVector3.at(0, -1, 0),
-            BlockVector3.at(1, 1, 0),
-            BlockVector3.at(-1, 1, 0),
-            BlockVector3.at(0, 1, 1),
-            BlockVector3.at(0, 1, -1),
-            BlockVector3.at(1, -1, 0),
-            BlockVector3.at(-1, -1, 0),
-            BlockVector3.at(0, -1, 1),
-            BlockVector3.at(0, -1, -1)
+            BlockVector3.at(1,0,0), BlockVector3.at(-1,0,0), BlockVector3.at(0,0,1), BlockVector3.at(0,0,-1),
+            BlockVector3.at(0,1,0), BlockVector3.at(0,-1,0), BlockVector3.at(1,1,0), BlockVector3.at(-1,1,0),
+            BlockVector3.at(0,1,1), BlockVector3.at(0,1,-1), BlockVector3.at(1,-1,0), BlockVector3.at(-1,-1,0),
+            BlockVector3.at(0,-1,1), BlockVector3.at(0,-1,-1)
         ];
 
         var connectedCount = 0;
-
         for (var i = 0; i < directions.length; i++) {
-            var adjacentPos = pos.add(directions[i]);
-            if (isSameLineBlock(adjacentPos)) {
-                connectedCount++;
-            }
+            if (getBaseName(pos.add(directions[i])) === blockName) connectedCount++;
         }
         return connectedCount <= 1;
     }
 
-
     function lineDirectionWithCorners(origin, distance) {
-        var block = blocks.getBlock(origin);
-        var line_block_type = String(block).split("[")[0];
+        var line_block_type = getBaseName(origin);
         var lines = [];
-        var lines_string = [];
+        var visited = {};
 
         var is_online = function (o, dir) {
             var pos = o.add(dir);
-            if (lines_string.indexOf(String(pos)) != -1) return false;
-            var block = blocks.getBlock(pos);
-            if (!block) return false;
-            var blockName = String(block).split("[")[0];
-            if (blockName === "minecraft:air") return false;
-            return blockName == line_block_type;
+            if (visited[pos.toString()]) return false;
+            return getBaseName(pos) === line_block_type;
         }
 
         var dir = BlockVector3.at(1, 0, 0);
-        if (String(blocks.getBlock(origin.subtract(dir))).split("[")[0] == line_block_type) {
+        if (getBaseName(origin.subtract(dir)) === line_block_type) {
             dir = BlockVector3.at(-1, 0, 0);
         }
 
         var dx = dir.getX(), dz = dir.getZ();
-        var up = BlockVector3.at(0, 1, 0);
-        var down = BlockVector3.at(0, -1, 0);
+        var up = BlockVector3.at(0, 1, 0), down = BlockVector3.at(0, -1, 0);
 
         for (var i = 0; i < distance; i++) {
             var facing = dx == -1 ? "north" : dx == 1 ? "south" : dz == 1 ? "west" : dz == -1 ? "east" : "";
-            var cornerType = "";
-
-            var left = BlockVector3.at(dz, 0, -dx);
-            var right = BlockVector3.at(-dz, 0, dx);
-            var straight = BlockVector3.at(dx, 0, dz);
+            var left = BlockVector3.at(dz, 0, -dx), right = BlockVector3.at(-dz, 0, dx), straight = BlockVector3.at(dx, 0, dz);
 
             var leftConnected = is_online(origin, left) || is_online(origin, left.add(up)) || is_online(origin, left.add(down));
             var rightConnected = is_online(origin, right) || is_online(origin, right.add(up)) || is_online(origin, right.add(down));
 
-            if (leftConnected && !rightConnected) {
-                cornerType = "inner";
-            } else if (!leftConnected && rightConnected) {
-                cornerType = "outer";
-            }
+            var cornerType = (leftConnected && !rightConnected) ? "inner" : (!leftConnected && rightConnected) ? "outer" : "";
 
-            var facing_str = facing;
-
-            lines.push({ pos: origin, facing: facing_str, cornerType: cornerType });
-            lines_string.push(String(origin));
+            lines.push({ pos: origin, facing: facing, cornerType: cornerType });
+            visited[origin.toString()] = true;
 
             var nextDir = null;
-
-            if (is_online(origin, left.add(up))) {
-                nextDir = left.add(up);
-            } else if (is_online(origin, left)) {
-                nextDir = left;
-            } else if (is_online(origin, left.add(down))) {
-                nextDir = left.add(down);
-            } else if (is_online(origin, straight.add(up))) {
-                nextDir = straight.add(up);
-            } else if (is_online(origin, straight)) {
-                nextDir = straight;
-            } else if (is_online(origin, straight.add(down))) {
-                nextDir = straight.add(down);
-            } else if (is_online(origin, right.add(up))) {
-                nextDir = right.add(up);
-            } else if (is_online(origin, right)) {
-                nextDir = right;
-            } else if (is_online(origin, right.add(down))) {
-                nextDir = right.add(down);
-            } else {
-                break;
+            var checks = [left.add(up), left, left.add(down), straight.add(up), straight, straight.add(down), right.add(up), right, right.add(down)];
+            
+            for (var j = 0; j < checks.length; j++) {
+                if (is_online(origin, checks[j])) {
+                    nextDir = checks[j];
+                    break;
+                }
             }
 
-            dx = nextDir.getX();
-            dz = nextDir.getZ();
-
+            if (!nextDir) break;
+            dx = nextDir.getX(); dz = nextDir.getZ();
             origin = origin.add(nextDir);
         }
         return lines;
     }
 
     function replaceFacingBlocks(origin, distance) {
-        if (argv[1] == "wo") {
-            var outerBlockBase = "mishanguc:road_with_white_offset_out_ba_line";
-            var innerBlockBase = "mishanguc:road_with_white_offset_in_ba_line";
-            var defaultBlockBase = "mishanguc:road_with_white_offset_line";
-        } else if (argv[1] == "yo") {
-            var outerBlockBase = "mishanguc:road_with_yellow_offset_out_ba_line";
-            var innerBlockBase = "mishanguc:road_with_yellow_offset_in_ba_line";
-            var defaultBlockBase = "mishanguc:road_with_yellow_offset_line";
-        } else if (argv[1] == "w") {
-            var outerBlockBase = "mishanguc:road_with_white_ba_line";
-            var innerBlockBase = outerBlockBase;
-            var defaultBlockBaseAxis = "mishanguc:road_with_white_line";
-        } else if (argv[1] == "wt") {
-            var outerBlockBase = "mishanguc:road_with_white_ba_thick_line";
-            var innerBlockBase = outerBlockBase;
-            var defaultBlockBaseAxis = "mishanguc:road_with_white_thick_line";
-        } else if (argv[1] == "y") {
-            var outerBlockBase = "mishanguc:road_with_yellow_ba_line";
-            var innerBlockBase = outerBlockBase;
-            var defaultBlockBaseAxis = "mishanguc:road_with_yellow_line";
-        } else if (argv[1] == "yd") {
-            var outerBlockBase = "mishanguc:road_with_yellow_ba_double_line";
-            var innerBlockBase = outerBlockBase;
-            var defaultBlockBaseAxis = "mishanguc:road_with_yellow_double_line";
-        }
-
+        var conf = blockConfig[type];
         var lines = lineDirectionWithCorners(origin, distance);
-
-        if (lines.length >= distance) {
-            player.print("线段长度已达到最大距离: " + distance);
-        }
-
         var replacedCount = 0;
+
+        var cycle = dashLen + gapLen;
+        var cornerMap = {
+            "north_outer": "north_east", "north_inner": "south_east",
+            "east_outer":  "south_east", "east_inner":  "south_west",
+            "south_outer": "south_west", "south_inner": "north_west",
+            "west_outer":  "north_west", "west_inner":  "north_east"
+        };
 
         for (var i = 0; i < lines.length; i++) {
             var info = lines[i];
-            var pos = info.pos;
-            var facing = info.facing;
             var newBlockStr = "";
-            if (info.cornerType === "") {
-                if (defaultBlockBaseAxis) {
-                    var axis = (facing === "north" || facing === "south") ? "x" : "z";
-                    newBlockStr = defaultBlockBaseAxis + "[axis=" + axis + "]";
-                }
-                else { newBlockStr = defaultBlockBase + "[facing=" + facing + "]"; }
-            } else if (info.facing === "north" && info.cornerType === "outer") {
-                newBlockStr = outerBlockBase + "[facing=north_east]";
-            } else if (info.facing === "east" && info.cornerType === "inner") {
-                newBlockStr = innerBlockBase + "[facing=south_west]";
-            } else if (info.facing === "east" && info.cornerType === "outer") {
-                newBlockStr = outerBlockBase + "[facing=south_east]";
-            } else if (info.facing === "south" && info.cornerType === "inner") {
-                newBlockStr = innerBlockBase + "[facing=north_west]";
-            } else if (info.facing === "south" && info.cornerType === "outer") {
-                newBlockStr = outerBlockBase + "[facing=south_west]";
-            } else if (info.facing === "west" && info.cornerType === "inner") {
-                newBlockStr = innerBlockBase + "[facing=north_east]";
-            } else if (info.facing === "west" && info.cornerType === "outer") {
-                newBlockStr = outerBlockBase + "[facing=north_west]";
-            } else if (info.facing === "north" && info.cornerType === "inner") {
-                newBlockStr = innerBlockBase + "[facing=south_east]";
+
+            if (isDashed && (i % cycle >= dashLen)) {
+                newBlockStr = GAP_BLOCK_ID;
             } else {
-                continue;
+                if (info.cornerType === "") {
+                    if (conf.useAxis) {
+                        var axis = (info.facing === "north" || info.facing === "south") ? "x" : "z";
+                        newBlockStr = "mishanguc:road_with_" + conf.def + "_line[axis=" + axis + "]";
+                    } else {
+                        newBlockStr = "mishanguc:road_with_" + conf.def + "_line[facing=" + info.facing + "]";
+                    }
+                } else {
+                    var key = info.facing + "_" + info.cornerType;
+                    var subType = info.cornerType === "outer" ? conf.out : conf.in;
+                    var cornerFacing = cornerMap[key];
+                    if (cornerFacing) {
+                        newBlockStr = "mishanguc:road_with_" + subType + "_line[facing=" + cornerFacing + "]";
+                    }
+                }
             }
 
-            var newBlock = context.getBlock(newBlockStr);
-            if (newBlock) {
-                blocks.setBlock(pos, newBlock);
-                replacedCount++;
-            } else {
-                player.print("无法找到方块类型: " + newBlockStr);
+            if (newBlockStr) {
+                var newBlock = context.getBlock(newBlockStr);
+                if (newBlock) {
+                    blocks.setBlock(info.pos, newBlock);
+                    replacedCount++;
+                }
             }
         }
-
-        player.print("已替换方块数量: " + replacedCount);
+        player.print("处理完成。当前配置：" + (isDashed ? "虚线模式("+dashLen+"-"+gapLen+")" : "实线模式") + "。已处理: " + replacedCount + " 个方块。");
     }
 
-    var startPos = player.getBlockOn().toVector().toBlockPoint();
-
-    if (isLineEndPoint(startPos)) {
-        replaceFacingBlocks(startPos, 10000);
-    } else {
-        player.printError("这不是线的端点");
-    }
-} else {
-    player.printError("错误参数：" + argv[1]);
-    player.printError("仅支持：单白线w 白粗线wt 偏移白线wo 单黄线y 双黄线yd 偏移黄线yo");
-}
+})(); 
